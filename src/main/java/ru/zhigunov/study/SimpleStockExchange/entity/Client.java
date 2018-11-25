@@ -40,4 +40,25 @@ public class Client {
                 "name='" + name + '\'' +
                 '}';
     }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+
+        Client client = (Client) o;
+
+        if (name != null ? !name.equals(client.name) : client.name != null) return false;
+        if (moneyBalance != null ? !moneyBalance.equals(client.moneyBalance) : client.moneyBalance != null)
+            return false;
+        return stockBalance != null ? stockBalance.equals(client.stockBalance) : client.stockBalance == null;
+    }
+
+    @Override
+    public int hashCode() {
+        int result = name != null ? name.hashCode() : 0;
+        result = 31 * result + (moneyBalance != null ? moneyBalance.hashCode() : 0);
+        result = 31 * result + (stockBalance != null ? stockBalance.hashCode() : 0);
+        return result;
+    }
 }

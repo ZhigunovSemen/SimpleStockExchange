@@ -12,15 +12,15 @@ public class Main {
     private static Logger LOGGER = LogManager.getLogger(Main.class);
 
     public static void main(String[] args) {
-        try {
+        try (FileInputStream fisClients = new FileInputStream(new File("clients.txt"));
+             FileInputStream fisOrders = new FileInputStream(new File("orders.txt"));
+             FileOutputStream outputStream = new FileOutputStream(new File("result.txt"))) {
+
             LOGGER.info("-----------------------");
             LOGGER.info("Start");
             long ms = System.currentTimeMillis();
-            FileInputStream fisClients = new FileInputStream(new File("clients.txt"));
-            FileInputStream fisOrders = new FileInputStream(new File("orders.txt"));
-            FileOutputStream outputStream = new FileOutputStream(new File("result.txt"));
-            StockExchangeLauncher stockExchangeLauncher = new StockExchangeLauncher(fisClients, fisOrders, outputStream);
-            stockExchangeLauncher.run();
+            StockExchange stockExchange = new SimpleStockExchange(fisClients, fisOrders, outputStream);
+            stockExchange.launch();
 
             long ms2 = System.currentTimeMillis();
             LOGGER.info("End. Running time is " + (ms2 - ms) + " ms");

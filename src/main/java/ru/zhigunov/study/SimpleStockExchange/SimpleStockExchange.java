@@ -6,13 +6,15 @@ import ru.zhigunov.study.SimpleStockExchange.entity.Client;
 import ru.zhigunov.study.SimpleStockExchange.entity.OPERATION;
 import ru.zhigunov.study.SimpleStockExchange.entity.Order;
 import ru.zhigunov.study.SimpleStockExchange.entity.STOCK;
+import ru.zhigunov.study.SimpleStockExchange.util.OrderProcessor;
 
 import java.io.*;
+import java.lang.reflect.Field;
 import java.util.*;
 
-public class StockExchangeLauncher {
+public class SimpleStockExchange implements StockExchange {
 
-    private static Logger LOGGER = LogManager.getLogger(StockExchangeLauncher.class);
+    private static Logger LOGGER = LogManager.getLogger(SimpleStockExchange.class);
 
     private InputStream inputStreamClientData;
 
@@ -20,14 +22,16 @@ public class StockExchangeLauncher {
 
     private FileOutputStream saveResultOutputStream;
 
+    private OrderProcessor orderProcessor = new OrderProcessor();
+
     /**
      * @param inputStreamClientData входной паток данныъ о клиентах
      * @param inputStreamOrderData входной поток данных о заявках на покупку/продажу
      * @throws IOException
      */
-    public StockExchangeLauncher(InputStream inputStreamClientData,
-                                 InputStream inputStreamOrderData,
-                                 FileOutputStream saveResultOutputStream) throws IOException {
+    public SimpleStockExchange(InputStream inputStreamClientData,
+                               InputStream inputStreamOrderData,
+                               FileOutputStream saveResultOutputStream) throws IOException {
         if (null == inputStreamClientData || inputStreamClientData.available() == 0) {
             throw new IllegalArgumentException("Cannot read clients: clients data is null or not available");
         }
@@ -43,21 +47,24 @@ public class StockExchangeLauncher {
         }
     }
 
+    /** Карта клиентов биржи, проиндексированная по имени, для быстрого доступа, и отсортированная, для порядка */
     private Map<String, Client> clients = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
 
     private List<Order> orders = new LinkedList<>();
 
-    /** формируем очередь заявок по каждому виду ценных бумаг, чтобы не сравнивать заявки на разные бумеги */
+    /** формируем очередь заявок по каждому виду ценных бумаг, чтобы не сравнивать заявки на разные бумаги */
     private Map<STOCK, List<Order>> orderQueue = new HashMap<>();
 
 
     private void loadClients() throws IOException {
         Scanner scanner = new Scanner(inputStreamClientData);
         while(scanner.hasNextLine()) {
-            String line = scanner.nextLine();
+            String line = scanner.nextLine().trim();
             String[] data = line.split("\t");
             int index = 0;
+            if (line.length()< 5) continue;
             String clientName = data[index++];
+            if (clientName.startsWith("//")) continue;
             Long moneyBalance = Long.parseLong(data[index++]);
             Map<STOCK, Integer> stocks = new HashMap<>();
             for (STOCK stock : STOCK.values()) {
@@ -78,8 +85,10 @@ public class StockExchangeLauncher {
         while(scanner.hasNextLine()) {
             String line = scanner.nextLine();
             String[] data = line.split("\t");
+            if (line.length()< 5) continue;
             int index = 0;
             String clientName = data[index++];
+            if (clientName.startsWith("//")) continue;
             Client client = clients.get(clientName);
             OPERATION operation = OPERATION.valueOfShortName(data[index++]);
             STOCK stock = STOCK.valueOf(data[index++]);
@@ -108,6 +117,12 @@ public class StockExchangeLauncher {
         LOGGER.debug("Not executed: " + notExecuted + " orders");
     }
 
+    /** Метод проходит по всем заявкам и ищет подходящую заявку для выполнены, и если не найдено, добавляет её в соответствующую очередь
+     *
+     * Полагаю, что быстрее было бы не ходить по списку заявок, а складывать и брать подходящую заявку исходя из хеша от (цена, кол-во)
+     * но что делать, если существуют несколько одинаковых заявок на одну ценную бумагу по цене и кол-ву?
+     * по крайней мере, указанный ниже подход гарантирует выполнение одинаковых заявок про хронометражу
+     *      - будет выполнена та завка, которая была размещена самой первой */
     private void addOrderToListAndTryToExcahange(Order newOrder) {
         STOCK stock = newOrder.getStock();
         String clientName = newOrder.getClient().getName();
@@ -123,8 +138,8 @@ public class StockExchangeLauncher {
                 if (newOrderPrice.equals(previousOrderPrice)
                         && newOrderStockCount.equals(previousOrderStockCount)
                         && newOrder.getOperation() != previousOrder.getOperation()) {
-                    process(newOrder);
-                    process(previousOrder);
+                    orderProcessor.processOrder(newOrder);
+                    orderProcessor.processOrder(previousOrder);
                     orderQueue.get(stock).remove(newOrder);
                     orderQueue.get(stock).remove(previousOrder);
                     LOGGER.debug("successful exchange between " + previousOrder.getClient().getName()
@@ -140,28 +155,7 @@ public class StockExchangeLauncher {
         }
     }
 
-    /**
-     * Выполнение заявки и пометка как выполненная
-     * @param order
-     */
-    private void process(Order order) {
-        Client client = order.getClient();
-        Integer price = order.getPrice();
-        Integer stockCount = order.getStockCount();
-        STOCK stock = order.getStock();
-        OPERATION operation = order.getOperation();
 
-        if (operation == OPERATION.BUY) {
-            client.setMoneyBalance(client.getMoneyBalance() - (price * stockCount));
-            Map<STOCK, Integer> balances = client.getStockBalance();
-            balances.put(stock, balances.get(stock) + stockCount);
-        } else if (operation == OPERATION.SELL) {
-            client.setMoneyBalance(client.getMoneyBalance() + (price * stockCount));
-            Map<STOCK, Integer> balances = client.getStockBalance();
-            balances.put(stock, balances.get(stock) - stockCount);
-        }
-        order.setExecuted(true);
-    }
 
     private void saveClients() throws IOException {
         StringBuilder clientsInfo = new StringBuilder();
@@ -174,9 +168,19 @@ public class StockExchangeLauncher {
             clientsInfo.append("\n");
         }
         saveResultOutputStream.write(clientsInfo.toString().getBytes());
+
+        try {
+            Field pathField = FileOutputStream.class.getDeclaredField("path");
+            pathField.setAccessible(true);
+            String path = (String) pathField.get(saveResultOutputStream);
+            LOGGER.info("All clients saved to " + path);
+        } catch (IllegalAccessException | NoSuchFieldException ex) {
+            LOGGER.info("All clients saved.");
+        }
     }
 
-    public void run() throws IOException {
+    @Override
+    public void launch() throws IOException {
         loadClients();
         loadOrders();
         processOrders();
